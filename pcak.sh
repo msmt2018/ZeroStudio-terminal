@@ -44,7 +44,7 @@ find . -type f -not -path '*/.*' -not -path '*/build/*' | while read -r file; do
     done
 done
 
-# 2. 第二阶段：物理目录重构
+# 第二阶段：物理目录重构
 echo "📁 正在重构目录层级..."
 for sep in "/" "_" "-"; do
     OLD_STR=$(echo "$OLD_BASE" | tr '.' "$sep")
@@ -67,7 +67,7 @@ for sep in "/" "_" "-"; do
     done
 done
 
-# 3. 第三阶段：文件名同步
+# 文件名同步
 echo "📄 正在同步文件名..."
 find . -depth -type f -not -path '*/.*' | while read -r src; do
     filename=$(basename "$src")
@@ -85,7 +85,7 @@ find . -depth -type f -not -path '*/.*' | while read -r src; do
     fi
 done
 
-# 4. 清理空目录
+#清理空目录
 find . -type d -empty -delete 2>/dev/null
 
 echo -e "\n✅ 重构任务全部完成！"

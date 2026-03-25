@@ -1,6 +1,9 @@
-package com.rk
+package android.zero.studio.terminal.utils
 
-object downloadConstants {
+/**
+ * 负责定义 PRoot 以及 Ubuntu RootFS 所需的下载地址常量。
+ */
+object DownloadConstants {
     private const val BASE_URL = "https://raw.githubusercontent.com/Xed-Editor/Karbon-PackagesX/main"
 
     const val PROOT_ARM = "$BASE_URL/arm/proot"

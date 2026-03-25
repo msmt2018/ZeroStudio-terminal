@@ -2,7 +2,7 @@
 
 <!DOCTYPE resources [
     <!ENTITY TERMUX_PACKAGE_NAME "android.zero.studio.terminal">
-    <!ENTITY TERMUX_APP_NAME "Termux">
+    <!ENTITY TERMUX_APP_NAME "ZeroStudioTerminal">
     <!ENTITY TERMUX_API_APP_NAME "Termux:API">
     <!ENTITY TERMUX_BOOT_APP_NAME "Termux:Boot">
     <!ENTITY TERMUX_FLOAT_APP_NAME "Termux:Float">
@@ -12,6 +12,23 @@
     ]>
 
 <resources>
+
+    
+    <!-- 部署相关 -->
+    <string name="terminal_checking">正在检查 Ubuntu 环境...</string>
+    <string name="terminal_downloading">正在下载组件: %1$s</string>
+    <string name="terminal_extracting">正在解压 RootFS (这可能需要几分钟)...</string>
+    <string name="terminal_setup_failed">初始化失败: %1$s</string>
+    <string name="terminal_retry">重试</string>
+    
+    <!-- 会话相关 -->
+    <string name="new_session">新建会话</string>
+    <string name="close_session">关闭会话</string>
+    <string name="no_active_sessions">暂无活跃会话</string>
+    <string name="session_name_template">会话 %1$d</string>
+
+    <!-- 警告 -->
+    <string name="warn_dont_leave">请勿在安装期间关闭应用，否则会导致环境损坏。</string>
 
     <string name="application_name">&TERMUX_APP_NAME;</string>
     <string name="shared_user_label">&TERMUX_APP_NAME; user</string>
