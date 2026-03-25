@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
+import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.view.*
@@ -24,11 +25,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.widget.doOnTextChanged
 import androidx.fragment.app.Fragment
+import androidx.fragment.app.viewModels
+import android.zero.studio.terminal.R
 import android.zero.studio.terminal.shared.termux.extrakeys.ExtraKeysConstants
 import android.zero.studio.terminal.shared.termux.extrakeys.ExtraKeysInfo
 import android.zero.studio.terminal.shared.termux.extrakeys.ExtraKeysView
@@ -65,6 +69,42 @@ const val VIRTUAL_KEYS_JSON = """[[
     {"key":"QUOTE","popup":""},
     "LEFT","DOWN","RIGHT","PGDN"
 ]]"""
+
+
+/**
+ * 生产级 Terminal UI 容器。
+ * 解决了双指缩放、剪切板、上下文菜单、虚拟键盘卡顿及沉浸式问题。
+ * @author android_zero
+ */
+class TerminalFragment : Fragment() {
+
+    private val viewModel: TerminalViewModel by viewModels()
+
+    override fun onCreateView(
+        inflater: LayoutInflater, container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View {
+        if (viewModel.state is TerminalState.Checking) {
+            viewModel.checkAndSetup(requireContext())
+        }
+
+        return ComposeView(requireContext()).apply {
+            setContent {
+                MaterialTheme(colorScheme = darkColorScheme()) {
+                    Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+                        when (val state = viewModel.state) {
+                            is TerminalState.Checking -> LoadingScreen("Checking Ubuntu Environment...")
+                            is TerminalState.Downloading -> DownloadingScreen(state)
+                            is TerminalState.SettingUp -> SetupScreen(state.setupSession)
+                            is TerminalState.Ready -> TerminalScreen(viewModel, this@TerminalFragment)
+                            is TerminalState.Error -> ErrorScreen(state.message) { viewModel.checkAndSetup(requireContext()) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -173,7 +213,7 @@ fun TerminalWorkspace(session: TerminalSession) {
     val context = LocalContext.current
     var terminalViewRef by remember { mutableStateOf<TerminalView?>(null) }
     
-    // 监听全局设置，使用 StateFlow
+    // 监听全局设置，使用 StateFlow (须提前在应用启动或 viewModel 中 init TerminalSettings)
     val fontSize by TerminalSettings.fontSize.collectAsState(initial = 12)
     val keepScreenOn by TerminalSettings.keepScreenOn.collectAsState(initial = false)
     val cursorStyle by TerminalSettings.cursorStyle.collectAsState(initial = 0)
@@ -182,7 +222,7 @@ fun TerminalWorkspace(session: TerminalSession) {
     val clipboard = remember { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
 
     Box(Modifier.fillMaxSize()) {
-        // 终端核心
+        // 1. 终端核心
         AndroidView(
             factory = { ctx ->
                 TerminalView(ctx, null).apply {
@@ -196,7 +236,7 @@ fun TerminalWorkspace(session: TerminalSession) {
                             return false // 交给原生 View 处理长按 TextSelection
                         }
 
-                        // 实现终端双指捏合缩放功能
+                        // 【新增要求】：实现终端双指捏合缩放功能
                         override fun onScale(scale: Float): Float {
                             val currentFont = TerminalSettings.fontSize.value.toFloat()
                             // 如果 scale 的值大幅偏离正常范围（初次触发），利用 currentFont 和变化比例计算新的字号
@@ -273,7 +313,7 @@ fun TerminalWorkspace(session: TerminalSession) {
                         override fun setTerminalShellPid(session: TerminalSession, pid: Int) {}
                         override fun getTerminalCursorStyle(): Int = cursorStyle
                         
-                        // Ignored log handlers
+                        // 占位的 Logger 实现
                         override fun logError(t: String, m: String) {}
                         override fun logWarn(t: String, m: String) {}
                         override fun logInfo(t: String, m: String) {}
@@ -326,6 +366,7 @@ fun TerminalWorkspace(session: TerminalSession) {
                 when (page) {
                     // 虚拟按键区
                     0 -> {
+                        // 隔离到 Factory 初始化，避免 update 频繁重建导致的按键卡死
                         val virtualKeysView = remember {
                             ExtraKeysView(context, null).apply {
                                 val extraKeysInfo = ExtraKeysInfo(

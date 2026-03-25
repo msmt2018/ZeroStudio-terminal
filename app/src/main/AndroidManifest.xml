@@ -51,6 +51,9 @@
         android:theme="@style/Theme.TermuxApp.DayNight.DarkActionBar"
         tools:targetApi="m">
         
+        
+        
+        
         <activity
             android:name="android.zero.studio.terminal.app.terminal.compose.TerminalActivity"
             android:exported="true"
@@ -65,6 +68,19 @@
             </intent-filter>
 
         </activity>
+
+
+        <service
+            android:name="android.zero.studio.terminal.app.terminal.compose.TerminalSessionService"
+            android:exported="false" />
+
+
+
+
+
+
+
+
 
         <activity
             android:name=".app.TermuxActivity"
