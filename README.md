@@ -5,6 +5,11 @@ UI interface development technology points:
  - 1 compose + material3
  - 2 fragment +activity ：Fragmented pages, quickly integrate any activity
  -  3 tab layout：Quickly manage multiple sessions
+ -  4 Support loading/installing/starting Linux bootstrap using termux terminal mode.
+ -  Mainly:Simultaneously supports pro loading/installing/starting any Linux rootfs
+The two methods mentioned above only require the use of corresponding activities.
+The native boot package of termux needs to be rebuilt by oneself
+
 
 ![1000666180](https://github.com/user-attachments/assets/2ac1c9c7-a661-4528-a675-6a38100cadef)
 
