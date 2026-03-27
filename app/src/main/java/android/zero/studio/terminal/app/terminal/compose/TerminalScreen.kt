@@ -8,6 +8,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.view.*
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -22,9 +23,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.widget.doOnTextChanged
@@ -32,9 +33,9 @@ import androidx.fragment.app.Fragment
 import android.zero.studio.terminal.shared.termux.extrakeys.ExtraKeysConstants
 import android.zero.studio.terminal.shared.termux.extrakeys.ExtraKeysInfo
 import android.zero.studio.terminal.shared.termux.extrakeys.ExtraKeysView
+import android.zero.studio.terminal.shared.termux.extrakeys.SpecialButton
 import android.zero.studio.terminal.shared.termux.terminal.TermuxTerminalViewClientBase
 import android.zero.studio.terminal.shared.termux.terminal.io.TerminalExtraKeys
-import android.zero.studio.terminal.shared.view.KeyboardUtils
 import android.zero.studio.terminal.terminal.TerminalSession
 import android.zero.studio.terminal.view.TerminalView
 
@@ -72,16 +73,19 @@ fun TerminalScreen(viewModel: TerminalViewModel, fragment: Fragment) {
     val context = LocalContext.current
     var showMenu by remember { mutableStateOf(false) }
 
-    // 避开系统状态栏与底部导航栏，防止重叠
-    Column(Modifier.fillMaxSize().systemBarsPadding()) {
-        
+    // 加入 imePadding()，使得内部布局在软键盘弹出时自动缩小，底部工具栏被顶起
+    Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+
         // 顶部 TabRow 与 更多菜单
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
+            // 修复 Issue 5: 新建会话时的 IndexOutOfBoundsException
+            val safeIndex = if (viewModel.sessions.isEmpty()) 0 else viewModel.currentIndex.coerceIn(0, maxOf(0, viewModel.sessions.lastIndex))
+
             ScrollableTabRow(
-                selectedTabIndex = if (viewModel.sessions.isEmpty()) 0 else viewModel.currentIndex,
+                selectedTabIndex = safeIndex,
                 edgePadding = 8.dp,
                 containerColor = Color.Transparent,
                 modifier = Modifier.weight(1f)
@@ -91,7 +95,7 @@ fun TerminalScreen(viewModel: TerminalViewModel, fragment: Fragment) {
                 } else {
                     viewModel.sessions.forEachIndexed { index, session ->
                         Tab(
-                            selected = viewModel.currentIndex == index,
+                            selected = safeIndex == index,
                             onClick = { viewModel.currentIndex = index },
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -143,7 +147,8 @@ fun TerminalScreen(viewModel: TerminalViewModel, fragment: Fragment) {
         // 核心终端区域
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (viewModel.sessions.isNotEmpty()) {
-                val currentSession = viewModel.sessions.getOrNull(viewModel.currentIndex)
+                // 安全获取 Session，防止越界
+                val currentSession = viewModel.sessions.getOrNull(viewModel.currentIndex.coerceIn(0, viewModel.sessions.lastIndex))
                 if (currentSession != null) {
                     TerminalWorkspace(currentSession)
                 }
@@ -172,7 +177,9 @@ fun TerminalWorkspace(session: TerminalSession) {
     val pagerState = rememberPagerState(pageCount = { 2 })
     val context = LocalContext.current
     var terminalViewRef by remember { mutableStateOf<TerminalView?>(null) }
-    
+    var extraKeysViewRef by remember { mutableStateOf<ExtraKeysView?>(null) }
+    val density = LocalDensity.current.density
+
     // 监听全局设置，使用 StateFlow
     val fontSize by TerminalSettings.fontSize.collectAsState(initial = 12)
     val keepScreenOn by TerminalSettings.keepScreenOn.collectAsState(initial = false)
@@ -186,67 +193,53 @@ fun TerminalWorkspace(session: TerminalSession) {
         AndroidView(
             factory = { ctx ->
                 TerminalView(ctx, null).apply {
+                    isFocusable = true
+                    isFocusableInTouchMode = true
+
                     val client = object : TermuxTerminalViewClientBase() {
+                        // 修复 Issue 1 & 4: 单击唤起系统软键盘并确保输入流畅
                         override fun onSingleTapUp(e: MotionEvent) {
-                            requestFocus()
-                            KeyboardUtils.showSoftKeyboard(ctx, this@apply)
+                            this@apply.requestFocus()
+                            val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                            imm.showSoftInput(this@apply, InputMethodManager.SHOW_IMPLICIT)
                         }
 
+                        // 修复 Issue 2: 长按唤出复制/粘贴/全选的原生浮动 ActionMode 菜单
                         override fun onLongPress(event: MotionEvent): Boolean {
-                            return false // 交给原生 View 处理长按 TextSelection
+                            this@apply.showContextMenu()
+                            return true
                         }
+
+                        // 修复 Issue 3.2: 组合键底层 API 桥接，返回 ExtraKeysView 的实时状态
+                        override fun readControlKey(): Boolean = extraKeysViewRef?.readSpecialButton(SpecialButton.CTRL, true) ?: false
+                        override fun readAltKey(): Boolean = extraKeysViewRef?.readSpecialButton(SpecialButton.ALT, true) ?: false
+                        override fun readShiftKey(): Boolean = extraKeysViewRef?.readSpecialButton(SpecialButton.SHIFT, true) ?: false
+                        override fun readFnKey(): Boolean = extraKeysViewRef?.readSpecialButton(SpecialButton.FN, true) ?: false
 
                         // 实现终端双指捏合缩放功能
                         override fun onScale(scale: Float): Float {
                             val currentFont = TerminalSettings.fontSize.value.toFloat()
-                            // 如果 scale 的值大幅偏离正常范围（初次触发），利用 currentFont 和变化比例计算新的字号
                             val newFontSize = if (scale < 8f || scale > 32f) {
                                 (currentFont * scale).coerceIn(8f, 32f)
                             } else {
                                 scale.coerceIn(8f, 32f)
                             }
-                            // 更新全局字体设置
                             TerminalSettings.updateFontSize(newFontSize.toInt())
                             return newFontSize
                         }
                     }
 
-                    // 设置自定义的 Context Menu 监听器，支持复制/粘贴
-                    setOnCreateContextMenuListener { menu, _, _ ->
-                        menu.add(0, 1, 0, "Copy").setOnMenuItemClickListener {
-                            val selected = this@apply.selectedText
-                            if (!selected.isNullOrEmpty()) {
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Terminal", selected))
-                                Toast.makeText(ctx, "Copied", Toast.LENGTH_SHORT).show()
-                                this@apply.stopTextSelectionMode()
-                            }
-                            true
-                        }
-                        menu.add(0, 2, 0, "Paste").setOnMenuItemClickListener {
-                            val text = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-                            if (text.isNotEmpty()) this@apply.mEmulator?.paste(text)
-                            true
-                        }
-                        menu.add(0, 3, 0, "Share").setOnMenuItemClickListener {
-                            val selected = this@apply.selectedText
-                            if (!selected.isNullOrEmpty()) {
-                                val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(android.content.Intent.EXTRA_TEXT, selected)
-                                }
-                                ctx.startActivity(android.content.Intent.createChooser(sendIntent, "Share via"))
-                                this@apply.stopTextSelectionMode()
-                            }
-                            true
-                        }
-                    }
+                    // 注释掉阻断原生 ActionMode 的拦截逻辑，解决长按菜单不弹出的问题
+                    /*
+                    setOnCreateContextMenuListener { menu, _, _ -> ... }
+                    */
 
                     // 将配置与操作注入会话
                     session.updateTerminalSessionClient(object : android.zero.studio.terminal.terminal.TerminalSessionClient {
                         override fun onTextChanged(changedSession: TerminalSession) = onScreenUpdated()
                         override fun onTitleChanged(changedSession: TerminalSession) {}
                         override fun onSessionFinished(finishedSession: TerminalSession) {}
-                        
+
                         override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
                             clipboard.setPrimaryClip(ClipData.newPlainText("Terminal", text))
                         }
@@ -272,7 +265,7 @@ fun TerminalWorkspace(session: TerminalSession) {
                         override fun onTerminalCursorStateChange(state: Boolean) {}
                         override fun setTerminalShellPid(session: TerminalSession, pid: Int) {}
                         override fun getTerminalCursorStyle(): Int = cursorStyle
-                        
+
                         // Ignored log handlers
                         override fun logError(t: String, m: String) {}
                         override fun logWarn(t: String, m: String) {}
@@ -294,7 +287,6 @@ fun TerminalWorkspace(session: TerminalSession) {
                     view.attachSession(session)
                 }
                 // 运用字号，通常使用 sp 的密度缩放
-                val density = context.resources.displayMetrics.scaledDensity
                 view.setTextSize((fontSize * density).toInt())
                 view.keepScreenOn = keepScreenOn
                 view.mEmulator?.setCursorStyle()
@@ -314,11 +306,16 @@ fun TerminalWorkspace(session: TerminalSession) {
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(48.dp)
-                // 启用毛玻璃模糊效果
-                .background(Color(0x66000000))
-                .blur(radius = 16.dp) 
+                // 修复 Issue 3: 增加 20% 高度 (48dp * 1.2 = ~58dp)
+                .height(58.dp)
         ) {
+            // 修复 Issue 3: 毛玻璃逻辑。丢弃让所有子元素变糊的 blur 修饰符，改用半透明纯色背景以贴合 Termux 体验且保证字迹清晰。
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(Color(0x991E1E1E)) // 深色半透明层，代替 blur 避免内容文字变糊
+            )
+
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize()
@@ -332,15 +329,17 @@ fun TerminalWorkspace(session: TerminalSession) {
                                     VIRTUAL_KEYS_JSON, "default", ExtraKeysConstants.CONTROL_CHARS_ALIASES
                                 )
                                 setButtonTextColor(android.graphics.Color.WHITE)
-                                // 透明背景以便漏出毛玻璃层
+                                // 透明背景以便透出下方的深色半透明背景
                                 setButtonBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                reload(extraKeysInfo, 48f)
+                                // 传入计算好的实际像素高度 58dp * density
+                                reload(extraKeysInfo, 58f * density)
                             }
                         }
-                        
+
                         LaunchedEffect(terminalViewRef) {
                             terminalViewRef?.let { tv ->
                                 virtualKeysView.setExtraKeysViewClient(TerminalExtraKeys(tv))
+                                extraKeysViewRef = virtualKeysView
                             }
                         }
 
@@ -361,7 +360,7 @@ fun TerminalWorkspace(session: TerminalSession) {
                                     setTextColor(android.graphics.Color.WHITE)
                                     setHintTextColor(android.graphics.Color.LTGRAY)
                                     hint = "Command input..."
-                                    background = null 
+                                    background = null
 
                                     doOnTextChanged { text, _, _, _ ->
                                         textInput = text.toString()
