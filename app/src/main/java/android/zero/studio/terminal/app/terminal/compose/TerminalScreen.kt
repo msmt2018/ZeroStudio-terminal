@@ -10,7 +10,6 @@ import android.view.*
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
@@ -73,8 +72,8 @@ fun TerminalScreen(viewModel: TerminalViewModel, fragment: Fragment) {
     val context = LocalContext.current
     var showMenu by remember { mutableStateOf(false) }
 
-    // 加入 imePadding()，使得内部布局在软键盘弹出时自动缩小，底部工具栏被顶起
-    Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+    // 与 TermuxActivity 行为保持一致: 顶层仅处理系统栏，键盘偏移交给底部工具栏。
+    Column(Modifier.fillMaxSize().systemBarsPadding()) {
 
         // 顶部 TabRow 与 更多菜单
         Row(
@@ -199,9 +198,11 @@ fun TerminalWorkspace(session: TerminalSession) {
                     val client = object : TermuxTerminalViewClientBase() {
                         // 修复 Issue 1 & 4: 单击唤起系统软键盘并确保输入流畅
                         override fun onSingleTapUp(e: MotionEvent) {
-                            this@apply.requestFocus()
-                            val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                            imm.showSoftInput(this@apply, InputMethodManager.SHOW_IMPLICIT)
+                            this@apply.requestFocusFromTouch()
+                            this@apply.post {
+                                val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                                imm.showSoftInput(this@apply, InputMethodManager.SHOW_IMPLICIT)
+                            }
                         }
 
                         // 修复 Issue 2: 长按唤出复制/粘贴/全选的原生浮动 ActionMode 菜单
@@ -216,16 +217,15 @@ fun TerminalWorkspace(session: TerminalSession) {
                         override fun readShiftKey(): Boolean = extraKeysViewRef?.readSpecialButton(SpecialButton.SHIFT, true) ?: false
                         override fun readFnKey(): Boolean = extraKeysViewRef?.readSpecialButton(SpecialButton.FN, true) ?: false
 
-                        // 实现终端双指捏合缩放功能
+                        // 与 TermuxActivity 保持一致: 累积比例超过阈值时按步进调整字号。
                         override fun onScale(scale: Float): Float {
-                            val currentFont = TerminalSettings.fontSize.value.toFloat()
-                            val newFontSize = if (scale < 8f || scale > 32f) {
-                                (currentFont * scale).coerceIn(8f, 32f)
-                            } else {
-                                scale.coerceIn(8f, 32f)
+                            if (scale < 0.9f || scale > 1.1f) {
+                                val current = TerminalSettings.fontSize.value
+                                val target = (current + if (scale > 1f) 1 else -1).coerceIn(8, 32)
+                                if (target != current) TerminalSettings.updateFontSize(target)
+                                return 1.0f
                             }
-                            TerminalSettings.updateFontSize(newFontSize.toInt())
-                            return newFontSize
+                            return scale
                         }
                     }
 
@@ -281,13 +281,16 @@ fun TerminalWorkspace(session: TerminalSession) {
                     terminalViewRef = this
                 }
             },
-            modifier = Modifier.fillMaxSize().background(Color.Black),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = 58.dp)
+                .background(Color.Black),
             update = { view ->
                 if (view.mTermSession != session) {
                     view.attachSession(session)
                 }
-                // 运用字号，通常使用 sp 的密度缩放
-                view.setTextSize((fontSize * density).toInt())
+                // TerminalView.setTextSize() 参数为 dp，不需要手动乘 density。
+                view.setTextSize(fontSize)
                 view.keepScreenOn = keepScreenOn
                 view.mEmulator?.setCursorStyle()
                 view.onScreenUpdated()
@@ -306,6 +309,8 @@ fun TerminalWorkspace(session: TerminalSession) {
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
                 // 修复 Issue 3: 增加 20% 高度 (48dp * 1.2 = ~58dp)
                 .height(58.dp)
         ) {
@@ -331,7 +336,7 @@ fun TerminalWorkspace(session: TerminalSession) {
                                 setButtonTextColor(android.graphics.Color.WHITE)
                                 // 透明背景以便透出下方的深色半透明背景
                                 setButtonBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                // 传入计算好的实际像素高度 58dp * density
+                                // ExtraKeysView.reload() 需要像素高度，和 TermuxActivity 行为对齐。
                                 reload(extraKeysInfo, 58f * density)
                             }
                         }
